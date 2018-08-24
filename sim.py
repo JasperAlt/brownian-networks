@@ -165,6 +165,9 @@ def scan(result, d, self_edges=False, weight=False, bound=None, handling=None, m
     D = len(result[0])
     P = len(result)
 
+    if(D is 1):
+        return scan_1D(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory):
+
     p = index.Property(dimension=D)
     # using an R*-tree variant did not produced faster speeds for any n tested
     # (up to 10,000)
