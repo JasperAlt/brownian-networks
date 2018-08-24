@@ -8,6 +8,7 @@ from numpy import asarray, empty, zeros, expand_dims, cumsum, tile, copy
 from networkx import from_numpy_matrix, draw
 from pylab import figure, pause, plot, xlim, ylim, show, close
 from rtree import index
+from bintrees import FastAVLTree
 
 ###############################################################################
 
@@ -252,6 +253,53 @@ def scan(result, d, self_edges=False, weight=False, bound=None, handling=None, m
     print("")
     return S
 
+# for the 1D case, use an AVL tree
+def scan_1D(result, d, self_edges=False, weight=False, bound=None, handling=None, memory=False):
+    stdout.write("Assembling graphs")
+    stdout.flush()
+    # recover sim parameters
+    N = len(result[0][0]) # "N" = N + 1
+    D = len(result[0])
+    P = len(result)
+
+    S = []          # List of adjacency matrices
+
+    # Each time
+    for t in range(N):
+        # copy previous matrix or start fresh as appropriate
+        if t is 0 or memory is False:
+            S.append(zeros((P, P)))
+        else:
+            S.append(copy(S[t-1]))
+
+        idx = FastAVLTree()
+        # insert all points not out of bounds
+        for i in range(P):
+            I = result[i][0][t]
+            if I < 999999999.0:
+                idx.insert(I, i)
+
+
+        for i in range(P):
+            I = result[i][0][t]
+            if I < 999999999.0:
+                minimum = I - d
+                maximum = I + d
+                # get all results within range
+                hits = [v for (k,v) in idx.item_slice(minimum,maximum)]
+                if handling is "Torus" and maximum > bound:
+                    hits.append([v for (k,v) in idx.item_slice(0, maximum % bound)])
+                if handling is "Torus" and minimum < 0:
+                    hits.append([v for (k,v) in idx.item_slice(minimum % bound, bound)])
+                for j in hits:
+                    S[t][i,j] = (self_edges or i != j)
+
+                    # add something to handle weight case here
+
+        stdout.write(".")
+        stdout.flush()
+    print("")
+    return S
 
 ##############################################################################
 
