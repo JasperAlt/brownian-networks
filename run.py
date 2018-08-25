@@ -14,21 +14,51 @@ def series(measure, matrices):
     print("")
     return result
 
+def largest_component_series(measure, matrices):
+    stdout.write("Computing series")
+    stdout.flush()
+    result = []
+    for m in matrices:
+        G = nx.from_numpy_matrix(m)
+        G = max(nx.connected_component_subgraphs(G), key=len)
+        result.append(measure(G))
+        stdout.write(".")
+        stdout.flush()
+    print("")
+    return result
+
+def average_component_series(measure, matrices):
+    stdout.write("Computing series")
+    stdout.flush()
+    result = []
+    for m in matrices:
+        G = nx.from_numpy_matrix(m)
+        G = nx.connected_component_subgraphs(G)
+        s = 0
+        for g in G:
+            s += measure(g)
+        result.append(s/len(G))
+        stdout.write(".")
+        stdout.flush()
+    print("")
+    return result
+
+
 ################################################################################
 
 # Parameters
 
-P = 500
+P = 50
 # number of points (int)
-N = 200
+N = 90
 # time slices (int)
-T = 50.0
+T = 100.0
 # total time (float)
-D = 2
+D = 1
 # dimensions (int)
 delta = 1.0
 # scaling parameter for motion (float)
-d = 0.1
+r = 1.
 # radius of connections (float)
 bound = 20
 # boundary (None or number)
@@ -36,14 +66,14 @@ bound = 20
 init_bound = bound
 # boundary for initialization can be separate
 handling = None
-# "Exit", "Torus", None
-init = "Point"
+# boundary handling: "Exit", "Torus", None
+init = "Random"
 # Initialization ("Default", "Random" or "Point")
 # # (Default is point if unbounded, random if bounded)
 drift = None
 # None or a length-D list
 memory = False
-# True or False
+# do nodes stay connected (boolean)
 
 ################################################################################
 
@@ -54,12 +84,12 @@ result = sim(P,N,T,D, bound=bound, init_bound = init_bound, handling=handling, i
 bounded = handle_bounds(handling, bound, result)
 
 # get matrices
-s = scan(bounded, d, bound=bound, handling=handling, memory=memory)
+#s = scan(bounded, r, bound=bound, handling=handling, memory=memory)
+s = scan(bounded, r, bound=bound, handling=handling, memory=memory)
 
-a = series(nx.average_clustering, s)
+a = series(nx.density, s)
 
 plot(a)
 show()
 
-# plot_2D result
-# net_anim(s, rate= 0.01)
+net_anim(s, rate= 0.02)
