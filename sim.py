@@ -275,9 +275,6 @@ def scan_cells(result, d, self_edges=False, weight=False, bound=None, handling=N
     D = len(result[0])
     P = len(result)
 
-    if(D is 1):
-        return scan_1D(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
-
     offsets = []
     for k in range(pow(2, D)):
         plus = [int(x) for x in bin(k)[2:].zfill(D)]
