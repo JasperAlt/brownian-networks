@@ -1,0 +1,136 @@
+% Based on http://www.texample.net/tikz/examples/3d-graph-model/ by Andreas Menge
+\documentclass[10pt]{article}
+\usepackage{tikz}
+%transforms all coordinates the same way when used (use it within a scope!)
+%(rotation is not 45 degress to avoid overlapping edges)
+% Input: point of origins x and y coordinate
+\newcommand{\myGlobalTransformation}[2]
+{
+    \pgftransformcm{1}{0}{0.4}{0.5}{\pgfpoint{#1cm}{#2cm}}
+}
+
+% draw a 4x4 helper grid in 3D
+% Input: point of origins x and y coordinate and additional drawing-parameters
+\newcommand{\gridThreeD}[3]
+{
+    \begin{scope}
+        \myGlobalTransformation{#1}{#2};
+        \draw [#3,step=2cm,opacity=0.8] grid (8,8);
+    \end{scope}
+}
+
+\tikzstyle myBG=[line width=3pt,opacity=1.0]
+
+% draws lines with white background to show which lines are closer to the
+% viewer (Hint: draw from bottom up and from back to front)
+%Input: start and end point
+\newcommand{\drawLinewithBG}[2]
+{
+    \draw[gray, very thick] (#1) -- (#2);
+}
+
+% draws all horizontal graph lines within grid
+\newcommand{\pathA}
+{
+    \drawLinewithBG{0,1}{4,2};
+    \drawLinewithBG{4,2}{3,2.5};
+    \drawLinewithBG{3,2.5}{4.25, 3};
+    \drawLinewithBG{4.25, 3}{5.5, 4.2};
+    \drawLinewithBG{5.5, 4.2}{5.2, 2.85};
+    \drawLinewithBG{5.2,2.85}{7, 4};
+    \drawLinewithBG{7, 4}{8, 6};
+}
+\newcommand{\pathB}
+{
+    \drawLinewithBG{0,6.9}{2,6};
+    \drawLinewithBG{2,6}{3.5, 6.5};
+    \drawLinewithBG{3.5, 6.5}{4.7, 7};
+    \drawLinewithBG{4.7, 7}{5, 5.2};
+    \drawLinewithBG{5, 5.2}{8, 4.2};
+}
+\newcommand{\pathC}
+{
+    \drawLinewithBG{4.2,0}{5,2};
+    \drawLinewithBG{5,2}{3,3};
+    \drawLinewithBG{3,3}{4,4};
+    \drawLinewithBG{4,4}{0,6};
+}
+
+% draws all vertical graph lines within grid
+\newcommand{\graphLinesVertical}
+{
+    %swaps x and y coordinate (hence vertical lines):
+    \pgftransformcm{0}{1}{1}{0}{\pgfpoint{0cm}{0cm}}
+    \pathA;
+    \pathB;
+    \pathC;
+    \drawRadii
+    \drawEdges
+    \drawNodes
+}
+
+\newcommand{\drawNodes}
+{
+  \draw
+    (4,4)       node  [circle,fill=black] {}
+    (4,4)       node  [above right=+2pt, black]      {$a$}
+    (5,5.2)     node  [circle,fill=black] {}
+    (5,5.2)     node  [above right=+2pt, black]      {$b$}
+    (5.2, 2.85) node  [circle,fill=black] {}
+    (5.2, 2.85) node  [above right=+2pt, black]      {$c$};
+}
+\newcommand{\drawRadii}
+{
+  \draw
+  (4,4)       [gray, thick] (4,4)       circle(2)
+  (5,5.2)     [gray, thick] (5,5.2)     circle(2)
+  (5.2,2.85)  [gray, thick] (5.2,2.85)  circle(2);
+}
+\newcommand{\drawEdges}
+{
+  \draw[solid, very thick] (4,4) -- (5,5.2);
+  \draw[solid, very thick] (4,4) -- (5.2,2.85);
+}
+
+
+\begin{document}
+\pagestyle{empty}
+
+
+\begin{tikzpicture}
+
+    %first grid
+    \gridThreeD{0}{10}{black!50};
+
+    %first layer
+    \begin{scope}
+      \myGlobalTransformation{0}{10};
+      \pathA;
+      \pathB;
+      \pathC;
+      \drawNodes
+    \end{scope}
+
+    %second grid
+    \gridThreeD{0}{5}{black!50};
+
+    %second layer
+    \begin{scope}
+      \myGlobalTransformation{0}{5};
+      \drawRadii
+      \drawNodes
+    \end{scope}
+
+    %third grid
+    \gridThreeD{0}{0}{black!50};
+
+    %third layer
+    \begin{scope}
+      \myGlobalTransformation{0}{0};
+      \drawEdges
+      \drawNodes
+    \end{scope}
+
+\end{tikzpicture}
+
+\end{document}
