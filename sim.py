@@ -5,8 +5,7 @@ from sys import stdout
 from scipy.stats import norm
 from scipy.spatial import distance
 from numpy import asarray, empty, zeros, expand_dims, cumsum, tile, copy
-from networkx import from_numpy_matrix, draw
-from pylab import figure, pause, plot, xlim, ylim, show, close
+import networkx as nx
 from rtree import index
 from bintrees import FastAVLTree
 import multiprocessing as mp
@@ -52,7 +51,7 @@ def brownian(x0, N, T, out=None, delta=1, drift=None):
 #   "Default": If boundary, Random, if not, Point
 # init_bound: side of square area within which points are initialized (if none,
 # set to bound)
-def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bound="Default", drift=None):
+def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bound="Default", drift=None, origin_point=None):
     print("Simulating motion...")
     result = [];
     origin = [0 for d in range(D)]
@@ -68,7 +67,6 @@ def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bou
             init_bound = bound
 
     for p in range(P):
-        # initialize trajectory
         t = empty((D,N+1))
 
         # uniform random starting point
@@ -77,7 +75,7 @@ def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bou
                 for d in range(D):
                     t[d,0] = random() * init_bound
             elif init_bound is not None:
-                # randomize by rolling until within range
+                # randomize by rolling until within radius
                 for d in range(D):
                     t[d,0] = 999999999.0
                 while distance.euclidean(origin, [t[d, 0] for d in range(D)]) > init_bound:
@@ -100,9 +98,63 @@ def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bou
         brownian(t[:,0], N, T, out=t[:,1:], drift=drift)
         result.append(t)
 
+    if origin_point:
+        result.append([[0 for t in range(N+1)] for d in range(D)])
+
     return handle_bounds(handling, bound, result)
 
 # handle_bounds: Apply boundary behavior to output from sim
+def sim(P, N, T, D, delta=1, bound=None, handling=None, init="Default", init_bound="Default", drift=None, origin_point=None):
+    print("Simulating motion...")
+    result = [];
+    origin = [0 for d in range(D)]
+    seed()
+
+    if init is "Default":
+        if bound is None:
+            init = "Point"
+        else:
+            init = "Random"
+
+    if init_bound is "Default":
+            init_bound = bound
+
+    for p in range(P):
+        t = empty((D,N+1))
+
+        # uniform random starting point
+        if init is "Random":
+            if init_bound is not None and handling is "Torus":
+                for d in range(D):
+                    t[d,0] = random() * init_bound
+            elif init_bound is not None:
+                # randomize by rolling until within radius
+                for d in range(D):
+                    t[d,0] = 999999999.0
+                while distance.euclidean(origin, [t[d, 0] for d in range(D)]) > init_bound:
+                    for d in range(D):
+                        t[d,0] = random() * init_bound * 2 - init_bound
+            else:
+                for d in range(D):
+                    t[d,0] = random()
+
+        # single point
+        if init is "Point":
+            if bound is not None and handling is "Torus":
+                for d in range(D):
+                    t[d,0] = bound / 2
+            else:
+                for d in range(D):
+                    t[d,0] = 0
+
+        # brownian motion
+        brownian(t[:,0], N, T, out=t[:,1:], drift=drift)
+        result.append(t)
+
+    if origin_point:
+        result.append([[0 for t in range(N+1)] for d in range(D)])
+
+    return handle_bounds(handling, bound, result)
 # If "Torus" handling, %= bound coordinates
 # If "Exit" handling, map all out of bound coords to 999999999.0
 def handle_bounds(handling, bound, result):
@@ -132,6 +184,7 @@ def handle_bounds(handling, bound, result):
                 if flag:
                     for d in D:
                         result[p][d][n] = 999999999.0
+
     return result
 
 ###############################################################################
@@ -157,6 +210,27 @@ def torus_distance(I, J, bound):
 
     return sqrt(squared_sides)
 
+# Spatial tree for the toroid case and cell lists for all cases
+# require a list of directions on each side of a D-cube
+def offset(D, bound=1):
+    offsets = []
+    for k in range(pow(2, D)):
+        # we do this using the binary integers up to 2^D:
+        plus = [int(x) * bound for x in bin(k)[2:].zfill(D)]
+        # eg, 1 -> 0001 -> 0,0,0,1 -> 0,0,0,5 if boundary is 5
+        # then 2 -> ... -> 0,0,5,0 etc
+        for l in range(pow(2,D)):
+            minus = [-int(x) * bound for x in bin(l)[2:].zfill(D)]
+            # eg, 1 -> 0001 -> 0,0,0,-5 if boundary is 5
+            # add the positive and negative offsets...
+            m = list(map(add, plus, minus))
+            # the unique results are then the offsets in all directions
+            if m not in offsets:
+                offsets.append(m)
+
+    return offsets
+
+
 # scan: sim result -> list of np array adjacency matrices
 # self_edges toggles whether nodes are within distance of themselves
 # if weights, A[ij] = d(ij), else A[ij] = (d(ij) < d)
@@ -172,37 +246,27 @@ def scan(result, d, self_edges=False, weight=False, bound=None, handling=None, m
 
     if(D is 1):
         return scan_1D(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
+    if(D < 3 or handling=="Torus"):
+        return scan_cells(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
 
     p = index.Property(dimension=D)
     # using an R*-tree variant did not produced faster speeds for any n tested
     # (up to 10,000)
 
-    S = []          # List of adjacency matrices
+    G = []
+
     if handling is "Torus":
-        offsets = []
-        # simulate the toroid by inserting extra points in the 'next box over'
-        # in each direction.
-        # we do this using the binary integers up to 2^D:
-        for k in range(pow(2, D)):
-            plus = [int(x) * bound for x in bin(k)[2:].zfill(D)]
-            # eg, 1 -> 0001 -> 0,0,0,1 -> 0,0,0,5 if boundary is 5
-            # then 2 -> ... -> 0,0,5,0 etc
-            for l in range(pow(2,D)):
-                minus = [-int(x) * bound for x in bin(l)[2:].zfill(D)]
-                # eg, 1 -> 0001 -> 0,0,0,-5 if boundary is 5
-                # add the positive and negative offsets...
-                m = list(map(add, plus, minus))
-                # the unique results are then the offsets in all directions
-                if m not in offsets:
-                    offsets.append(m)
+        offsets = offset(D, bound)
 
     # Each time
     for t in range(N):
         # copy previous matrix or start fresh as appropriate
         if t is 0 or memory is False:
-            S.append(zeros((P, P)))
+            G.append(nx.Graph())
         else:
-            S.append(copy(S[t-1]))
+            G.append(G[t-1].copy())
+
+        G[t].add_nodes_from(range(P))
 
         # build rtree of points unless they are out of bounds
         idx = index.Index(properties=p)
@@ -254,14 +318,13 @@ def scan(result, d, self_edges=False, weight=False, bound=None, handling=None, m
                         dist = distance.euclidean(I,J)
                     # connect nodes if in distance and appropriate re self edges
                     if dist < d:
-                        S[t][i,j] = (self_edges or i != j)
-                    if weight:
-                        S[t][i,j] *= dist
+                        if self_edges or i != j:
+                            G[t].add_edge(i, j, weight=(dist if weight else 1))
 
         stdout.write(".")
         stdout.flush()
     print("")
-    return S
+    return G
 
 
 # implementation of scan using cell lists
@@ -275,42 +338,21 @@ def scan_cells(result, d, self_edges=False, weight=False, bound=None, handling=N
     D = len(result[0])
     P = len(result)
 
-    offsets = []
-    for k in range(pow(2, D)):
-        plus = [int(x) for x in bin(k)[2:].zfill(D)]
-        # eg, 1 -> 0001 -> 0,0,0,1 -> 0,0,0,5 if boundary is 5
-        # then 2 -> ... -> 0,0,5,0 etc
-        for l in range(pow(2,D)):
-            minus = [-int(x) for x in bin(l)[2:].zfill(D)]
-            # eg, 1 -> 0001 -> 0,0,0,-5 if boundary is 5
-            # add the positive and negative offsets...
-            m = list(map(add, plus, minus))
-            # the unique results are then the offsets in all directions
-            if m not in offsets:
-                offsets.append(m)
-
-    S = []          # List of adjacency matrices
+    offsets = offset(D)
+    G = []
 
     for t in range(N):
-        # copy previous matrix or start fresh as appropriate
         if t is 0 or memory is False:
-            S.append(zeros((P, P)))
+            G.append(nx.Graph())
         else:
-            S.append(copy(S[t-1]))
+            G.append(G[t-1].copy())
 
-        # keep a cell list for each dimension
-        # get minimum and maximum coordinates per dimension
-        dimensions = []
-        for coord in range(D):
-            coords = [result[p][coord][t] for p in range(P)]
-            minimum = min(coords)
-            maximum = max(coords)
-            dimensions.append((minimum, maximum))
+        G[t].add_nodes_from(range(P))
 
         cells = {}
 
         # build hash table
-        # each point inserted at '(x,y,...,z)'
+        # each point hashed to key '(x,y,...,z)'
         for p in range(P):
             skip = False
             cell = "("
@@ -374,14 +416,13 @@ def scan_cells(result, d, self_edges=False, weight=False, bound=None, handling=N
                         dist = distance.euclidean(I,J)
                     # connect nodes if in distance and appropriate re self edges
                     if dist < d:
-                        S[t][i,j] = (self_edges or i != j)
-                    if weight:
-                        S[t][i,j] *= dist
+                        if self_edges or i != j:
+                            G[t].add_edge(i, j, weight=(dist if weight else 1))
 
         stdout.write(".")
         stdout.flush()
     print("")
-    return S
+    return G
 
 def scan_cells_multi(result, d, self_edges=False, weight=False, bound=None, handling=None, memory=False):
     stdout.write("Assembling graphs")
@@ -391,116 +432,115 @@ def scan_cells_multi(result, d, self_edges=False, weight=False, bound=None, hand
     D = len(result[0])
     P = len(result)
 
-    if(D is 1):
-        return scan_1D(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
+    offsets = offset(D)
 
-    offsets = []
-    for k in range(pow(2, D)):
-        plus = [int(x) for x in bin(k)[2:].zfill(D)]
-        # eg, 1 -> 0001 -> 0,0,0,1 -> 0,0,0,5 if boundary is 5
-        # then 2 -> ... -> 0,0,5,0 etc
-        for l in range(pow(2,D)):
-            minus = [-int(x) for x in bin(l)[2:].zfill(D)]
-            # eg, 1 -> 0001 -> 0,0,0,-5 if boundary is 5
-            # add the positive and negative offsets...
-            m = list(map(add, plus, minus))
-            # the unique results are then the offsets in all directions
-            if m not in offsets:
-                offsets.append(m)
+    # do the multi thing
+    man = mp.Manager()
+    output = man.Queue()
+    S = []
+    for chunk in range(max(N/10 + 1, 1)):
+        start = chunk * 10
+        end = min(start + 10, N)
 
-    S = []          # List of adjacency matrices
+        processes = [mp.Process(target=scan_cells_multi_t, args=(result, d, t, P, D, N, output, self_edges, weight, bound, handling, offsets)) for t in range(start, end)]
 
-    for t in range(N):
-        # copy previous matrix or start fresh as appropriate
-        if t is 0 or memory is False:
-            S.append(zeros((P, P)))
-        else:
-            S.append(copy(S[t-1]))
+        for proc in processes:
+            proc.start()
+        for proc in processes:
+            proc.join()
 
-        # keep a cell list for each dimension
-        # get minimum and maximum coordinates per dimension
-        dimensions = []
+        s = [output.get() for proc in processes]
+        s.sort(key=itemgetter(1))
+        S.extend(s)
+
+    S = [A for (A, t) in S]
+
+    if memory is not False:
+        for t in range(1, N):
+            for i in range(P):
+                for j in range(P):
+                    S[t][i][j] = (S[t][i][j] or S[t - 1][i][j])
+
+    print("")
+    return S
+
+def scan_cells_multi_t(result, d, t, P, D, N, output, self_edges, weight, bound, handling, offsets):
+    G = nx.Graph()
+    G.add_nodes_from(range(P))
+
+    cells = {}
+
+    # build hash table
+    for p in range(P):
+        skip = False
+        cell = "("
         for coord in range(D):
-            coords = [result[p][coord][t] for p in range(P)]
-            minimum = min(coords)
-            maximum = max(coords)
-            dimensions.append((minimum, maximum))
+            c = result[p][coord][t]
+            if c == 999999999.0:
+                skip = True
+            else:
+                c = c // d
+                cell += str(int(c)) + ","
+        cell = cell[:-1] + ")"
 
-        cells = {}
-
-        # build hash table
-        # each point inserted at '(x,y,...,z)'
-        for p in range(P):
-            skip = False
-            cell = "("
-            for coord in range(D):
-                c = result[p][coord][t]
-                if c == 999999999.0:
-                    skip = True
-                else:
-                    c = c // d
-                    cell += str(int(c)) + ","
-
-            cell = cell[:-1] + ')'
-            if skip is not True and cell in cells:
-                cells[cell].append(p)
-            elif skip is not True:
-                cells[cell] = [p]
+        if skip is not True and cell in cells:
+            cells[cell].append(p)
+        elif skip is not True:
+            cells[cell] = [p]
 
         # then for each cell in the table, build list of contents + neighbors'
         # contents. Do this by decomposing the key string and adding offsets
-        for cell in list(cells):
-            coords = [int(coord) for coord in cell[1:-1].split(",")]
-            neighborhood = [list(map(add, coords, o)) for o in offsets]
+    for cell in list(cells):
+        coords = [int(coord) for coord in cell[1:-1].split(",")]
+        neighborhood = [list(map(add, coords, o)) for o in offsets]
 
-            if handling is "Torus":
-                mod_neighbors = []
-                for n in neighborhood:
-                    m = [coord % int(bound//d) for coord in n]
-                    mod_neighbors.append(m)
-                neighborhood = []
-                for m in mod_neighbors:
-                    if m not in neighborhood:
-                        neighborhood.append(m)
-
-            # now that we have a list of neighbor cell coordinates, get the
-            # particles they contain by rebuilding the (coord) strings...
-            neighbors = []
+        if handling is "Torus":
+            mod_neighbors = []
             for n in neighborhood:
-                ncell = "("
+                m = [coord % int(bound//d) for coord in n]
+                mod_neighbors.append(m)
+            neighborhood = []
+            for m in mod_neighbors:
+                if m not in neighborhood:
+                    neighborhood.append(m)
+
+        # now that we have a list of neighbor cell coordinates, get the
+        # particles they contain by rebuilding the (coord) strings...
+        neighbors = []
+        for n in neighborhood:
+            ncell = "("
+            for coord in range(D):
+                c = n[coord]
+                c = c // d
+                ncell += str(int(c)) + ","
+
+            ncell = ncell[:-1] + ')'
+            if ncell in cells:
+                neighbors += cells[ncell]
+
+        # and for each particle in the current cell, check against all the
+        # particles in the list of neighbors
+        for i in cells[cell]:
+            I = []
+            for coord in range(D):
+                I.append(result[i][coord][t])
+            for j in neighbors:
+                J = []
                 for coord in range(D):
-                    c = n[coord]
-                    c = c // d
-                    ncell += str(int(c)) + ","
+                    J.append(result[j][coord][t])
+                if handling is "Torus":
+                    dist = torus_distance(I,J, bound)
+                else:
+                    dist = distance.euclidean(I,J)
+                # connect nodes if in distance and appropriate re self edges
+                if dist < d:
+                    if self_edges or i != j:
+                        G.add_edge(i, j, weight=(dist if weight else 1))
 
-                ncell = ncell[:-1] + ')'
-                if ncell in cells:
-                    neighbors += cells[ncell]
+    stdout.write(".")
+    stdout.flush()
+    output.put((G, t))
 
-            # and for each particle in the current cell, check against all the
-            # particles in the list of neighbors
-            for i in cells[cell]:
-                I = []
-                for coord in range(D):
-                    I.append(result[i][coord][t])
-                for j in neighbors:
-                    J = []
-                    for coord in range(D):
-                        J.append(result[j][coord][t])
-                    if handling is "Torus":
-                        dist = torus_distance(I,J, bound)
-                    else:
-                        dist = distance.euclidean(I,J)
-                    # connect nodes if in distance and appropriate re self edges
-                    if dist < d:
-                        S[t][i,j] = (self_edges or i != j)
-                    if weight:
-                        S[t][i,j] *= dist
-
-        stdout.write(".")
-        stdout.flush()
-    print("")
-    return S
 
 # scan: sim result -> list of np array adjacency matrices
 # self_edges toggles whether nodes are within distance of themselves
@@ -518,6 +558,8 @@ def scan_multi(result, d, self_edges=False, weight=False, bound=None, handling=N
 
     if(D is 1):
         return scan_1D(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
+    if(D < 3 or handling=="Torus"):
+        return scan_cells_multi(result, d, self_edges=self_edges, weight=weight, bound=bound, handling=handling, memory=memory)
 
     if handling is "Torus":
         offsets = []
@@ -560,7 +602,7 @@ def scan_multi(result, d, self_edges=False, weight=False, bound=None, handling=N
 
     S = [A for (A, t) in S]
 
-    if memory:
+    if memory is not False:
         for t in range(1, N):
             for i in range(P):
                 for j in range(P):
@@ -572,11 +614,13 @@ def scan_multi(result, d, self_edges=False, weight=False, bound=None, handling=N
 def scan_multi_t(result, d, t, P, D, N, output, self_edges, weight, bound, handling, offsets):
     # Each time
     # build rtree of points unless they are out of bounds
-    A = zeros((P,P))
     p = index.Property(dimension=D)
-    # using an R*-tree variant did not produced faster speeds for any n tested
+    G = nx.Graph()
+    G.add_nodes_from(range(P))
+    # using an R*-tree variant did not produce faster speeds for any n tested
     # (up to 10,000)
     idx = index.Index(properties=p)
+
     for i in range(P):
         I = []
         # get point coordinates
@@ -624,13 +668,12 @@ def scan_multi_t(result, d, t, P, D, N, output, self_edges, weight, bound, handl
                     dist = distance.euclidean(I,J)
                 # connect nodes if in distance and appropriate re self edges
                 if dist < d:
-                    A[i,j] = (self_edges or i != j)
-                if weight:
-                    A[i,j] *= dist
+                    if self_edges or i != j:
+                        G.add_edge(i, j, weight=(dist if weight else 1))
 
     stdout.write(".")
     stdout.flush()
-    output.put((A, t))
+    output.put((G, t))
 
 # for the 1D case, use an AVL tree
 def scan_1D(result, d, self_edges=False, weight=False, bound=None, handling=None, memory=False):
@@ -639,15 +682,18 @@ def scan_1D(result, d, self_edges=False, weight=False, bound=None, handling=None
     D = len(result[0])
     P = len(result)
 
-    S = []          # List of adjacency matrices
+    G = []          # list of graphs
 
     # Each time
     for t in range(N):
         # copy previous matrix or start fresh as appropriate
         if t is 0 or memory is False:
-            S.append(zeros((P, P)))
+            G.append(nx.Graph())
         else:
-            S.append(copy(S[t-1]))
+            G.append(G[t-1].copy())
+
+        G[t].add_nodes_from(range(P))
+
 
         idx = FastAVLTree()
         # insert all points not out of bounds
@@ -665,91 +711,15 @@ def scan_1D(result, d, self_edges=False, weight=False, bound=None, handling=None
                 # get all results within range
                 hits = [v for (k,v) in idx.item_slice(minimum,maximum)]
                 if handling is "Torus" and maximum > bound:
-                    hits.append([v for (k,v) in idx.item_slice(0, maximum % bound)])
+                    hits += [v for (k,v) in idx.item_slice(0, maximum % bound)]
                 if handling is "Torus" and minimum < 0:
-                    hits.append([v for (k,v) in idx.item_slice(minimum % bound, bound)])
+                    hits += [v for (k,v) in idx.item_slice(minimum % bound, bound)]
                 for j in hits:
-                    S[t][i,j] = (self_edges or i != j)
+                    if self_edges or i != j:
+                        G[t].add_edge(i, j, weight=1)
                     # add something to handle weight case here
         stdout.write(".")
         stdout.flush()
     print("")
-    return S
-
-##############################################################################
-
-# DISPLAY functions
-
-##############################################################################
-
-# Write trajectories to output
-def trajectories(result):
-    print("Displaying results...")
-    for p in result:
-        print(p)
-
-# Plot point trajectories from 2D sim result
-def plot_2D(result):
-    print("Displaying results...")
-    for p in result:
-        plot(p[0], p[1])
-
-    xm = 0
-    xM = 0
-    ym = 0
-    yM = 0
-    for p in result:
-        for x in p[0]:
-            if x < 999999999.0 and x > xM:
-                xM = x
-            if x < xm:
-                xm = x
-        for y in p[1]:
-            if y < 999999999.0 and y > yM:
-                yM = y
-            if y < ym:
-                ym = y
-    xlim(xm,xM)
-    ylim(ym,yM)
-
-    show()
-
-# Animate point motion from 2D sim result
-def anim_2D(result, rate=0.05):
-    print("Displaying results...")
-    xm = 0
-    xM = 0
-    ym = 0
-    yM = 0
-    for p in result:
-        for x in p[0]:
-            if x < 999999999.0 and x > xM:
-                xM = x
-            if x < xm:
-                xm = x
-        for y in p[1]:
-            if y < 999999999.0 and y > yM:
-                yM = y
-            if y < ym:
-                ym = y
-    xlim(xm,xM)
-    ylim(ym,yM)
-    show()
-    for t in range(1, len(result[0][0])):
-        fig = figure()
-        for p in result:
-            plot(p[0][t], p[1][t], 'o')
-        pause(rate)
-        close(fig)
-
-# Plot graphs from scan result
-def net_anim(series, rate=0.05):
-    print("Displaying results...")
-    show()
-    for A in series:
-        fig = figure()
-        G = from_numpy_matrix(A)
-        draw(G, node_color="black", node_size=10)
-        pause(rate)
-        close(fig)
+    return G
 
