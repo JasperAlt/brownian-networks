@@ -13,7 +13,7 @@ import time
 
 # Parameters
 
-P = 200
+P = 300
 # number of points (int)
 N = 100
 # time slices (int)
@@ -50,15 +50,17 @@ G = scan_cells_multi(result, r, bound=bound, handling=handling, memory=memory)
 
 # plot average CC for each time step
 plot(series(nx.average_clustering, G))
+plot([average_value(nx.average_clustering, G)] * 101)
 
 # a hacky way to generate 100 random geometric graphs:
 RGGs = []
 for i in range(100):
     # simulate for a single step
     result = sim(P,1,(1/3.),D, bound=bound, init_bound = init_bound, handling=handling, init=init, drift=drift, origin_point=True)
-    # add the first of the two resulting graphs = the initial RGG to our
-    # list of RGGs
-    RGGs.append(scan_cells_multi(result, r, bound=bound, handling=handling, memory=memory)[0])
+    # take the first of the two resulting graphs = the initial RGG
+    initial = scan_cells_multi(result, r, bound=bound, handling=handling, memory=memory)[0]
+    # add it to the list
+    RGGs.append(initial)
 
 # plot the average average CC over the RGGs for 101 time slices
 plot([average_value(nx.average_clustering, RGGs)] * 101)
