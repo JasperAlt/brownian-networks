@@ -13,11 +13,11 @@ import time
 
 # Parameters
 
-P = 100
+P = 200
 # number of points (int)
-N = 60
+N = 100
 # time slices (int)
-T = 20.0
+T = (N/3.0)
 # total time (float)
 D = 2
 # dimensions (int)
@@ -47,7 +47,25 @@ result = sim(P,N,T,D, bound=bound, init_bound = init_bound, handling=handling, i
 
 # build network from trajectories
 G = scan_cells_multi(result, r, bound=bound, handling=handling, memory=memory)
+
+# plot average CC for each time step
+plot(series(nx.average_clustering, G))
+
+# a hacky way to generate 100 random geometric graphs:
+RGGs = []
+for i in range(100):
+    # simulate for a single step
+    result = sim(P,1,(1/3.),D, bound=bound, init_bound = init_bound, handling=handling, init=init, drift=drift, origin_point=True)
+    # add the first of the two resulting graphs = the initial RGG to our
+    # list of RGGs
+    RGGs.append(scan_cells_multi(result, r, bound=bound, handling=handling, memory=memory)[0])
+
+# plot the average average CC over the RGGs for 101 time slices
+plot([average_value(nx.average_clustering, RGGs)] * 101)
+show()
+
 #w = build_moving_window(G, 5)
+
 
 #net_anim(w, rate=0.02)
 #plot_2D(result, time=3, radius=None, edges=None, center="Square")
